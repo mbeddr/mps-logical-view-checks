@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="MPSProject">
+    <projectModules>
+      <modulePath path="$PROJECT_DIR$/languages/com.mbeddr.logicalview.checks.demo/com.mbeddr.logicalview.checks.demo.mpl" folder="" />
+      <modulePath path="$PROJECT_DIR$/languages/com.mbeddr.logicalview.checks.runtime/com.mbeddr.logicalview.checks.runtime.msd" folder="" />
+      <modulePath path="$PROJECT_DIR$/languages/com.mbeddr.logicalview.checks.sandbox/com.mbeddr.logicalview.checks.sandbox.msd" folder="" />
+      <modulePath path="$PROJECT_DIR$/languages/com.mbeddr.logicalview.checks/com.mbeddr.logicalview.checks.mpl" folder="" />
+      <modulePath path="$PROJECT_DIR$/solutions/com.mbeddr.logicalview.checks.build/com.mbeddr.logicalview.checks.build.msd" folder="" />
+    </projectModules>
+  </component>
+</project>

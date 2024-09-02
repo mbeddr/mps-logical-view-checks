@@ -1,0 +1,30 @@
+# -----------------------------------------------------------
+# General
+/.idea/
+/.gradle/
+
+junitvmwatcher*.properties
+build.properties
+junit*.properties
+/gradle.properties
+
+classes_gen/
+source_gen/
+source_gen.caches/
+
+workspace.xml
+
+# -----------------------------------------------------------
+# * tests
+test_gen/
+test_gen.caches/
+TEST-*.xml
+TESTS-*.xml
+
+# --------------------------------------- 
+# RCP
+build/
+!/build/scripts/build.xml
+
+# Mac-specific
+.DS_Store
