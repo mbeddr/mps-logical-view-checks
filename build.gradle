@@ -1,0 +1,269 @@
+import de.itemis.mps.gradle.*
+import de.itemis.mps.gradle.downloadJBR.*
+import de.itemis.mps.gradle.tasks.*
+
+plugins {
+    id 'de.itemis.mps.gradle.common' version '1.28.0.+'
+    id 'download-jbr' version '1.28.0.+'
+    id 'base'
+    id 'maven-publish'
+    id 'co.riiid.gradle' version '0.4.2'
+
+    id 'de.itemis.mps.gradle.launcher' version '2.2.0.+'
+}
+
+ext.jbrVers = '17.0.6-b653.34'
+
+downloadJbr {
+    jbrVersion = jbrVers
+}
+
+// detect if we are in a CI build
+if (System.env.CI != null && System.env.CI.toBoolean()) {
+    // is this github
+    ext.ciBuild = true
+} else {
+    // on teamcity we are in a CI build
+    ext.ciBuild = project.hasProperty("teamcity")
+}
+
+// Detect jdk location, required to start ant with tools.jar on classpath otherwise javac and tests will fail
+String jdk_home
+
+if (ext.has('java11_home')) {
+    jdk_home = ext.get('java11_home')
+} else if (System.getenv('JB_JAVA11_HOME') != null) {
+    jdk_home = System.getenv('JB_JAVA11_HOME')
+} else {
+    def expected = JavaVersion.VERSION_11
+    if (JavaVersion.current() != expected) {
+        throw new GradleException("This build script requires Java 11 but you are currently using ${JavaVersion.current()}.\nWhat you can do:\n"
+                + "  * Use project property java11_home to point to the Java 11 JDK.\n"
+                + "  * Use environment variable JB_JAVA11_HOME to point to the Java 11 JDK\n"
+                + "  * Run Gradle using Java 11")
+    }
+    jdk_home = System.getProperty('java.home')
+}
+
+// Check JDK location
+if (!new File(jdk_home, "lib").exists()) {
+    throw new GradleException("Unable to locate JDK home folder. Detected folder is: $jdk_home")
+}
+
+logger.info 'Using JDK at {}', jdk_home
+
+ext.jdk_home = jdk_home
+
+ext.dependencyRepositories = [
+        'https://maven.pkg.github.com/mbeddr/*',
+        'https://artifacts.itemis.cloud/repository/maven-mps/'
+]
+
+// Dependency versions
+ext.mpsVersion =  '2022.3.2'
+
+// Project versions
+ext.major = '2022'
+ext.minor = '3'
+
+if (ciBuild) {
+    String branch = GitBasedVersioning.gitBranch
+    def buildNumber = System.env.GITHUB_RUN_NUMBER != null ? System.env.GITHUB_RUN_NUMBER.toInteger() : System.env.BUILD_NUMBER.toInteger()
+    if (branch.startsWith("maintenance") || branch.startsWith("mps")) {
+        version = "$major.$minor.$buildNumber.${GitBasedVersioning.gitShortCommitHash}"
+    } else {
+        version = GitBasedVersioning.getVersionWithCount(major, minor, buildNumber)
+    }
+
+    println "##teamcity[buildNumber '${version}']"
+} else {
+    println "Local build detected, version will be SNAPSHOT"
+    version = "$major.$minor-SNAPSHOT"
+}
+
+configurations {
+    mps
+    languageLibs
+    // includes also junit tasks support
+    antLib
+}
+
+dependencies {
+    mps "com.jetbrains:mps:$mpsVersion"
+    antLib "org.apache.ant:ant-junit:1.10.6"
+}
+
+repositories {
+    for (repoUrl in project.dependencyRepositories) {
+        maven {
+            url repoUrl
+            credentials {
+                username = project.findProperty("github_username") ?: System.getenv("GITHUB_ACTOR")
+                password = project.findProperty("github_token") ?: System.getenv("GITHUB_TOKEN")
+            }
+        }
+    }
+    mavenCentral()
+}
+
+ext.skipResolveMps = project.hasProperty('mpsHomeDir')
+ext.mpsHomeDir = rootProject.file(project.findProperty('mpsHomeDir') ?: "$buildDir/mps")
+
+if (project.skipResolveMps) {
+    task resolveMps {
+        doLast {
+            logger.info "MPS resolution skipped"
+            logger.info "MPS home: " + mpsHomeDir.getAbsolutePath()
+        }
+    }
+} else {
+    task resolveMps(type: Sync) {
+        dependsOn configurations.mps
+        from {
+            configurations.mps.resolve().collect { zipTree(it) }
+        }
+        into mpsHomeDir
+    }
+}
+
+// tools needed for compiler support in ant calls
+ext.buildScriptClasspath = project.configurations.antLib.fileCollection { true } +
+        project.files("$project.jdk_home/lib/tools.jar")
+
+def artifactsDir = file("$buildDir/artifacts")
+def dependenciesDir = file("$buildDir/dependencies")
+
+
+// ___________________ utilities ___________________
+
+def defaultScriptArgs = [
+        'mps.home'                          : mpsHomeDir,
+        'mps_home'                          : mpsHomeDir,
+        'build.jna.library.path'            : new File(mpsHomeDir, "lib/jna/${System.getProperty('os.arch')}"),
+        'com.mbeddr.logicalview.checks.home'                        : rootDir,
+        'build.dir'                         : buildDir,
+        'version'                           : version,
+        'build.date'                        : new Date(),
+]
+
+// enables https://github.com/mbeddr/mps-gradle-plugin#providing-global-defaults
+task configureJava {
+    dependsOn "downloadJbr"
+    doLast {
+        project.ext["itemis.mps.gradle.ant.defaultScriptArgs"] = defaultScriptArgs.collect { "-D$it.key=$it.value".toString() }
+        project.ext["itemis.mps.gradle.ant.defaultScriptClasspath"] = buildScriptClasspath
+        project.ext["itemis.mps.gradle.ant.defaultJavaExecutable"] = tasks.getByName("downloadJbr").javaExecutable
+        println project.findProperty("itemis.mps.gradle.ant.defaultJavaExecutable")
+    }
+}
+
+// All MPS tasks depend on configureJava and resolveMps
+tasks.withType(RunAntScript).configureEach {
+    dependsOn(configureJava, resolveMps)
+}
+
+File scriptFile(String name) {
+    file("$buildDir/scripts/$name")
+}
+
+def build_project = tasks.register('build_project', BuildLanguages) {
+    script scriptFile('build.xml')
+}
+
+task package_project(type: Zip, dependsOn: build_project) {
+    archiveBaseName = 'com.mbeddr.logicalview.checks'
+    from artifactsDir
+    include 'com.mbeddr.logicalview.checks/**'
+}
+
+assemble.dependsOn(tasks.withType(BuildLanguages))
+
+publishing {
+    repositories {
+		maven {
+			name = "GitHubPackages"
+			url = uri("https://maven.pkg.github.com/mbeddr/mps-logical-view-checks")
+            credentials {
+                username = project.findProperty("github_username") ?: System.getenv("GITHUB_ACTOR")
+                password = project.findProperty("github_token") ?: System.getenv("GITHUB_TOKEN")
+            }
+		}
+        if (project.hasProperty("artifacts.itemis.cloud.user") && project.hasProperty("artifacts.itemis.cloud.pw")) {
+            maven {
+                name = "ItemisNexus"
+                url =  uri("https://artifacts.itemis.cloud/repository/maven-mps-releases")
+                    credentials {
+                        username = project.findProperty("artifacts.itemis.cloud.user")
+                        password = project.findProperty("artifacts.itemis.cloud.pw")
+                    }
+            }
+        }
+    }
+    publications {
+        MPSLogicalViewChecks(MavenPublication) {
+            groupId 'com.mbeddr'
+            artifactId 'logical-view-checks'
+            artifact package_project
+            pom.withXml {
+                def dependenciesNode = asNode().appendNode('dependencies')
+                configurations.languageLibs.resolvedConfiguration.firstLevelModuleDependencies.each {
+                    def dependencyNode = dependenciesNode.appendNode('dependency')
+                    dependencyNode.appendNode('groupId', it.moduleGroup)
+                    dependencyNode.appendNode('artifactId', it.moduleName)
+                    dependencyNode.appendNode('version', it.moduleVersion)
+                    dependencyNode.appendNode('type', it.moduleArtifacts[0].type)
+                }
+                configurations.mps.resolvedConfiguration.firstLevelModuleDependencies.each {
+                    def dependencyNode = dependenciesNode.appendNode('dependency')
+                    dependencyNode.appendNode('groupId', it.moduleGroup)
+                    dependencyNode.appendNode('artifactId', it.moduleName)
+                    dependencyNode.appendNode('version', it.moduleVersion)
+                    dependencyNode.appendNode('type', it.moduleArtifacts[0].type)
+                    dependencyNode.appendNode('scope', 'provided')
+                }
+            }
+        }
+    }
+}
+
+task cleanMps(type: Delete) {
+    delete fileTree(dir: projectDir, include: ["**/classes_gen/**", "**/source_gen/**", "**/source_gen.caches/**", "tmp/**"])
+}
+
+clean.dependsOn cleanMps
+
+defaultTasks 'build'
+
+task rebuild(dependsOn:[clean, build_project])
+
+ext.mpsPluginRoots = ['mps-build', 'mps-console', 'mps-trove', 'mps-modelchecker']
+        .collect { new File(mpsHomeDir, "plugins/$it") }
+ext.jbrJavaLauncher = tasks.named('downloadJbr', DownloadJbrForPlatform).flatMap { it.javaLauncher }
+
+tasks.register('migrate', MpsMigrate) {
+    dependsOn(resolveMps, 'downloadJbr', 'build_project')
+
+    javaLauncher = jbrJavaLauncher
+    mpsHome = mpsHomeDir
+    folderMacros.put('com.mbeddr.logicalview.checks.home', layout.projectDirectory)
+    projectDirectories.from('code')
+    pluginRoots.from(mpsPluginRoots)
+
+    haltOnPrecheckFailure = true
+    haltOnDependencyError = true
+}
+
+tasks.register('remigrate', Remigrate) {
+    dependsOn(resolveMps, 'downloadJbr')
+    mustRunAfter('migrate')
+
+    // Technically we don't need to _depend_ on build_all_languages because we can opt to rerun only migrations that
+    // come from MPS.
+    mustRunAfter('build_project')
+
+    javaLauncher = jbrJavaLauncher
+    mpsHome = mpsHomeDir
+    folderMacros.put('com.mbeddr.logicalview.checks.home', layout.projectDirectory)
+    projectDirectories.from('code')
+    pluginRoots.from(mpsPluginRoots)
+}
