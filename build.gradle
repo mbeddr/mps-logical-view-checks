@@ -60,7 +60,7 @@ ext.dependencyRepositories = [
 ]
 
 // Dependency versions
-ext.mpsVersion =  '2022.3.2'
+ext.mpsVersion =  '2023.3'
 
 // Project versions
 ext.major = '2022'
