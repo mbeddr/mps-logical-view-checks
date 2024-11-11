@@ -19,7 +19,7 @@ plugins {
     id 'maven-publish'
     id 'co.riiid.gradle' version '0.4.2'
 
-    id 'de.itemis.mps.gradle.launcher' version '2.2.0.+'
+    id 'de.itemis.mps.gradle.launcher' version '2.5.2.+'
 }
 
 ext.jbrVers = '17.0.6-b653.34'
